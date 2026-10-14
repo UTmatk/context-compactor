@@ -1,0 +1,5 @@
+Dictionary (expand symbols before use):
+§ = 大型语言模型
+¶ = 上下文窗口
+◆ = 训练数据
+● = 神经网络
