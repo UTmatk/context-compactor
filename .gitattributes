@@ -1,0 +1,7 @@
+# Keep text files LF everywhere so build_packages.py reproduces identical zips
+# on Windows, Linux and macOS.
+* text=auto eol=lf
+
+# Binary artifacts must not be converted.
+*.zip binary
+*.png binary

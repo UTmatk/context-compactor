@@ -1,0 +1,4 @@
+# Runtime dependency of scripts/compact.py and scripts/auto_compactor.py.
+# Exact token counting is required: without tiktoken the tools refuse to build
+# a dictionary (the ~4 chars/token proxy rates every CJK phrase as <2 tokens).
+tiktoken>=0.7,<1

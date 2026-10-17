@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Prompt dictionary compaction demo (v2: non-overlapping greedy selection).
+# Copyright (C) 2026 UTmatk
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Prompt dictionary compaction demo.
 
-Maps high-frequency phrases to single-token symbols to shrink context.
-Key fix vs v1: a phrase that is a sub-phrase of an already-chosen longer
-phrase is skipped, so we never waste a dictionary slot on text that the
-longer entry already compresses.
+这是**教学用的薄壳**：真正的算法只有一份，在 `scripts/compact.py`。历史教训是
+这里曾经复制过一份早期实现，结果 `compact.py` 修好了、demo 没修，两边选词行为
+不一样。现在 demo 直接调用规范实现，两者不可能漂移。
 """
-import re
+from __future__ import annotations
 
-try:
-    import tiktoken
-    ENC = tiktoken.get_encoding("cl100k_base")
-    def n_tokens(s: str) -> int:
-        return len(ENC.encode(s))
-    HAVE_TOK = True
-except Exception:
-    HAVE_TOK = False
-    def n_tokens(s: str) -> int:
-        return max(1, len(s) // 4)
+import importlib.util
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_TARGET = os.path.join(_HERE, "scripts", "compact.py")
+
+_spec = importlib.util.spec_from_file_location("_kb_compact_impl", _TARGET)
+if _spec is None or _spec.loader is None:                       # pragma: no cover
+    raise SystemExit(f"canonical implementation missing: {_TARGET}")
+compact = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = compact
+_spec.loader.exec_module(compact)
 
 
 # Repeat a base paragraph several times to simulate a long, jargon-heavy
@@ -33,113 +37,42 @@ BASE = (
 )
 SAMPLE = " ".join([BASE] * 6)
 
-CANDIDATES = list("§¶▪◆●★☆♠♣♥♦⬡⬢◼◻⬣▲▼◀▶♀♂☀☂☎☘♪♫☯☮✝✡⚡🔥❄⚙⚘⚛⚜⬧⬨❖✪✿")
 
-
-def words_of(text):
-    return re.findall(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)*|[一-鿿]|[^\s\w]", text)
-
-
-def ngram_counts(wordlist, max_n=3):
-    counts = {}
-    n = len(wordlist)
-    for k in range(1, max_n + 1):
-        for i in range(n - k + 1):
-            phrase = " ".join(wordlist[i:i + k])
-            counts[phrase] = counts.get(phrase, 0) + 1
-    return counts
-
-
-def is_subphrase(candidate, chosen_phrase):
-    # candidate appears as a contiguous sub-phrase inside chosen_phrase
-    if candidate == chosen_phrase:
-        return True
-    p = " " + chosen_phrase + " "
-    c = " " + candidate + " "
-    return c in p
-
-
-def pick_symbols(n):
-    out = []
-    for ch in CANDIDATES:
-        if n_tokens(ch) == 1:        # only 1-token symbols compress anything
-            out.append(ch)
-        if len(out) >= n:
-            break
-    return out
-
-
-def compress(text, mapping):
-    for phrase in sorted(mapping, key=len, reverse=True):
-        sym = mapping[phrase]
-        rx = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
-        text = re.sub(rx, sym, text)
-    return text
-
-
-def main():
+def main() -> int:
     text = SAMPLE
-    words = words_of(text)
-    counts = ngram_counts(words, max_n=3)
+    mapping, legend_lines, legend_tok = compact.build_mapping(
+        text, top=15, max_ngram=3, cjk_min=2, cjk_max=6)
+    compressed = compact.compress(text, mapping)
 
-    raw = []
-    for phrase, cnt in counts.items():
-        tlen = n_tokens(phrase)
-        if tlen < 2 or cnt < 2:
-            continue
-        saving = cnt * (tlen - 1)
-        raw.append((saving, cnt, tlen, phrase))
-
-    raw.sort(reverse=True)
-
-    # non-overlapping greedy: skip any phrase already covered by a chosen longer one
-    chosen = []
-    for saving, cnt, tlen, phrase in raw:
-        if any(is_subphrase(phrase, cp) for _, _, _, cp in chosen):
-            continue
-        legend_cost = n_tokens("x = " + phrase)   # approx cost of one dict entry
-        if saving <= legend_cost:                 # must earn its own slot
-            continue
-        chosen.append((saving, cnt, tlen, phrase))
-
-    symbols = pick_symbols(len(chosen))
-    mapping = {}
-    legend_lines = []
-    legend_tok = 0
-    for (saving, cnt, tlen, phrase), sym in zip(chosen, symbols):
-        mapping[phrase] = sym
-        line = f"{sym} = {phrase}"
-        legend_lines.append(line)
-        legend_tok += n_tokens(line)
-
-    legend = "Dictionary (expand symbols before use):\n" + "\n".join(legend_lines) + "\n\n"
-    compressed = compress(text, mapping)
-
-    orig_tok = n_tokens(text)
-    comp_only_tok = n_tokens(compressed)
-    total_tok = n_tokens(legend + compressed)
+    orig_tok = compact.n_tokens(text)
+    comp_only_tok = compact.n_tokens(compressed)
+    total_tok = compact.n_tokens(compressed) + legend_tok
     per_turn = orig_tok - comp_only_tok
     break_even = (legend_tok / per_turn) if per_turn > 0 else float("inf")
 
     print("=" * 64)
-    print("PROMPT DICTIONARY COMPACTION DEMO  (v2, non-overlapping)")
-    print("tokenizer :", "tiktoken cl100k_base" if HAVE_TOK else "proxy (~4 chars/tok)")
+    print("PROMPT DICTIONARY COMPACTION DEMO (canonical implementation)")
+    print("tokenizer :", "tiktoken cl100k_base" if compact.HAVE_TOK else "proxy (~4 chars/tok)")
     print("=" * 64)
     print(f"original tokens            : {orig_tok}")
     print(f"compressed body tokens     : {comp_only_tok}")
-    print(f"dictionary (legend) tokens: {legend_tok}  (sent ONCE)")
+    print(f"dictionary (legend) tokens : {legend_tok}  (sent ONCE)")
     print(f"total with dictionary      : {total_tok}")
-    print(f"tokens saved               : {orig_tok - total_tok}  ({100*(orig_tok-total_tok)/orig_tok:.1f}%)")
+    print(f"tokens saved               : {orig_tok - total_tok}  ({100 * (orig_tok - total_tok) / orig_tok:.1f}%)")
     if break_even != float("inf"):
         print(f"break-even after           : {break_even:.2f} repeated turns")
     print("-" * 64)
     print("DICTIONARY:")
-    for l in legend_lines:
-        print("  " + l)
+    for line in legend_lines:
+        print("  " + line)
     print("-" * 64)
     print("COMPRESSED (head):")
     print(compressed[:460])
+    print("-" * 64)
+    restored = compact.expand(compressed, mapping)
+    print("round-trip restore         :", "OK (byte-identical)" if restored == text else "MISMATCH")
+    return 0 if restored == text else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
